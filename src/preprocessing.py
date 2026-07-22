@@ -1,6 +1,13 @@
+import argparse
 from pathlib import Path
 
 import pandas as pd
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Prepare food inflation forecasting data")
+    parser.add_argument("--input", dest="input_path", help="Optional uploaded CSV file to inspect or preprocess")
+    return parser.parse_args()
 
 
 def load_data():
@@ -53,12 +60,25 @@ def merge_datasets(bdi, brent, policy, prices):
 
 
 def aggregate_monthly_bdi(bdi):
-    bdi = bdi.set_index("Date")
-    monthly = bdi.resample("ME").agg({"BDI_Close": ["mean", "std", "min", "max"]})
-    monthly.columns = ["bdi_mean", "bdi_std", "bdi_min", "bdi_max"]
+    bdi = bdi.set_index("Date").sort_index()
+
+    monthly = pd.DataFrame(index=bdi.resample("ME").mean().index)
+    monthly["bdi_mean"] = bdi["BDI_Close"].resample("ME").mean()
+    monthly["bdi_std"] = bdi["BDI_Close"].resample("ME").std()
+    monthly["bdi_min"] = bdi["BDI_Close"].resample("ME").min()
+    monthly["bdi_max"] = bdi["BDI_Close"].resample("ME").max()
     monthly["bdi_range"] = monthly["bdi_max"] - monthly["bdi_min"]
+    monthly["bdi_cv"] = monthly["bdi_std"] / monthly["bdi_mean"].replace(0, pd.NA)
     monthly["bdi_return"] = monthly["bdi_mean"].pct_change()
-    monthly = monthly[["bdi_mean", "bdi_std", "bdi_range", "bdi_return"]]
+    monthly["bdi_month_direction"] = (
+        bdi["BDI_Close"].resample("ME").last() - bdi["BDI_Close"].resample("ME").first()
+    )
+    monthly["bdi_extreme_days"] = (
+        bdi["BDI_Close"].pct_change().abs().resample("ME").apply(lambda s: int((s > 0.03).sum()))
+    )
+    monthly["bdi_rolling_mean_3"] = monthly["bdi_mean"].rolling(3, min_periods=1).mean().shift(1)
+    monthly["bdi_rolling_std_3"] = monthly["bdi_std"].rolling(3, min_periods=1).mean().shift(1)
+    monthly = monthly.dropna().copy()
     monthly.index = monthly.index.to_period("M")
     return monthly
 
@@ -68,6 +88,10 @@ def create_lag_features(data):
 
     for lag in [1, 3, 6, 12]:
         features[f"food_price_inflation_lag_{lag}"] = features["food_price_inflation"].shift(lag)
+
+    for lag in [1, 3, 6, 12]:
+        for column in ["brent_price", "policy_rate", "bdi_mean", "bdi_std", "bdi_range", "bdi_return"]:
+            features[f"{column}_lag_{lag}"] = features[column].shift(lag)
 
     return features.dropna()
 
@@ -79,9 +103,17 @@ def split_train_test(data):
 
 
 if __name__ == "__main__":
-    data = load_data()
-    features = create_lag_features(data)
-    train, test = split_train_test(features)
-    print(data.head().to_string())
-    print("features", features.shape)
-    print("train", train.shape, "test", test.shape)
+    args = parse_args()
+
+    if args.input_path:
+        uploaded = pd.read_csv(args.input_path)
+        print(uploaded.head().to_string())
+        print("uploaded_rows", len(uploaded))
+        print("uploaded_columns", list(uploaded.columns))
+    else:
+        data = load_data()
+        features = create_lag_features(data)
+        train, test = split_train_test(features)
+        print(data.head().to_string())
+        print("features", features.shape)
+        print("train", train.shape, "test", test.shape)

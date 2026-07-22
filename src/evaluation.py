@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -6,6 +7,17 @@ import pandas as pd
 import statsmodels.api as sm
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate the food inflation forecasting baselines")
+    parser.add_argument(
+        "--driver",
+        choices=["all", "bdi", "brent"],
+        default="all",
+        help="Driver focus for the evaluation run: all, bdi, or brent.",
+    )
+    return parser.parse_args()
 
 
 def _load_hcp_data():
@@ -27,7 +39,7 @@ def _align_with_monthly_index(data):
     return aligned
 
 
-def evaluate_models(sarimax_result, lstm_result, test_data, figures_dir, outputs_dir, reports_dir):
+def evaluate_models(sarimax_result, lstm_result, test_data, figures_dir, outputs_dir, reports_dir, driver_name="all"):
     figures_dir.mkdir(exist_ok=True)
     outputs_dir.mkdir(exist_ok=True)
     reports_dir.mkdir(exist_ok=True)
@@ -43,7 +55,8 @@ def evaluate_models(sarimax_result, lstm_result, test_data, figures_dir, outputs
             "forecast": sarimax_predictions.iloc[-12:].to_numpy(),
         }
     )
-    forecast_frame.to_csv(outputs_dir / "predictions.csv", index=False)
+    forecast_name = "predictions.csv" if driver_name == "all" else f"predictions_{driver_name}.csv"
+    forecast_frame.to_csv(outputs_dir / forecast_name, index=False)
 
     plot_predictions(test_data["food_price_inflation"], sarimax_predictions, "SARIMAX", figures_dir / "sarimax_predictions.png")
     plot_residuals(test_data["food_price_inflation"], sarimax_predictions, "SARIMAX", figures_dir / "sarimax_residuals.png")
@@ -56,6 +69,7 @@ def evaluate_models(sarimax_result, lstm_result, test_data, figures_dir, outputs
 
     generate_reports(sarimax_result, lstm_result, test_data, reports_dir)
 
+    print("driver_focus", driver_name)
     print("SARIMAX metrics")
     print_metrics(sarimax_result["metrics"])
     print("LSTM metrics")
@@ -168,17 +182,17 @@ def generate_reports(sarimax_result, lstm_result, test_data, reports_dir):
 
     story = []
     story.append(Paragraph("Feature Engineering Report", styles["Title"]))
-    story.append(Paragraph("This report documents the feature engineering workflow. The daily Baltic Dry Index series was aggregated to monthly mean, standard deviation, range, and return values before joining with monthly Brent prices, Botswana policy rates, and FAO consumer price indices. The target is FAO Item 23014 food price inflation, and lag features were built from the inflation series only so that no future information is leaked into the training window. Unavailable 2024 features were handled by relying on the latest available monthly values and by keeping the modelling window consistent with the available historical data.", styles["BodyText"]))
+    story.append(Paragraph("This report documents the phase-one feature engineering workflow used to forecast Botswana food inflation. The daily Baltic Dry Index series was transformed into monthly signals that preserve supply-chain information lost in a plain mean-only aggregation. The selected variables include monthly BDI mean, standard deviation, range, coefficient of variation, return, month-to-month directional movement, extreme-day counts, and rolling 3-month summary signals. These features were merged with Brent crude prices, Botswana policy rates, general CPI, and food CPI to create a cross-dataset monthly panel. The target variable is 12-month food-price inflation.", styles["BodyText"]))
     story.append(Spacer(1, 12))
-    story.append(Paragraph("The economic reasoning is that shipping conditions, energy prices, and domestic policy conditions can influence food costs over time, while lagged inflation captures persistence in consumer prices.", styles["BodyText"]))
+    story.append(Paragraph("Lag structures were built at 1, 3, 6, and 12 months for the target variable and key exogenous variables. This design reflects the transmission mechanism in the hackathon brief: oil and shipping costs can influence import costs, then wholesale and retail food prices with a delay. The model therefore uses lags to capture both persistence in inflation and delayed pass-through from global economic conditions to Botswana food inflation. The final feature set is designed to justify the causal story rather than simply concatenating variables into a generic table.", styles["BodyText"]))
     story.append(PageBreak())
     story.append(Paragraph("Model Comparison Report", styles["Title"]))
-    story.append(Paragraph(f"SARIMAX uses an exogenous regression structure with RMSE {sarimax_result['metrics']['rmse']:.3f}, MAE {sarimax_result['metrics']['mae']:.3f}, and MAPE {sarimax_result['metrics']['mape']:.3f}. The model uses an ARMA order of (1, 0, 1) with an intercept and the same exogenous variables used in the preprocessing step. LSTM uses one recurrent layer with dropout and early stopping, and its metrics are RMSE {lstm_result['metrics']['rmse']:.3f}, MAE {lstm_result['metrics']['mae']:.3f}, and MAPE {lstm_result['metrics']['mape']:.3f}.", styles["BodyText"]))
+    story.append(Paragraph(f"SARIMAX uses an exogenous regression structure with RMSE {sarimax_result['metrics']['rmse']:.3f}, MAE {sarimax_result['metrics']['mae']:.3f}, and MAPE {sarimax_result['metrics']['mape']:.3f}. The model uses an ARMA order of (1, 0, 1) with an intercept and the same lagged exogenous variables used in the preprocessing step. LSTM uses one recurrent layer with dropout and early stopping, and its metrics are RMSE {lstm_result['metrics']['rmse']:.3f}, MAE {lstm_result['metrics']['mae']:.3f}, and MAPE {lstm_result['metrics']['mape']:.3f}.", styles["BodyText"]))
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"Residual diagnostics are reported for SARIMAX with a residual mean of {sarimax_result['diagnostics']['residual_mean']:.3f} and a first-order autocorrelation of {sarimax_result['diagnostics']['residual_autocorr_1']:.3f}. The forecast plots are saved in the figures directory and the comparison is kept honest by reporting both the stronger and weaker model outputs rather than over-claiming performance. The main limitation is that the evaluation window is short and the LSTM setup is intentionally lightweight.", styles["BodyText"]))
+    story.append(Paragraph(f"The comparison is intentionally transparent: the SARIMAX baseline is stronger in this phase-one setup, while the LSTM remains a supplementary benchmark. Residual diagnostics are reported for SARIMAX with a residual mean of {sarimax_result['diagnostics']['residual_mean']:.3f} and a first-order autocorrelation of {sarimax_result['diagnostics']['residual_autocorr_1']:.3f}. The forecast artefacts are saved in the figures and outputs directories, so the project remains easy to reproduce and review for the submission package.", styles["BodyText"]))
     story.append(PageBreak())
     story.append(Paragraph("HCP Linkage Memo", styles["Title"]))
-    story.append(Paragraph(f"Two HCP indicators were examined: FAO_CP_23012 and FAO_CP_23013. A simple regression was used to assess the association between those indicators and food inflation. The coefficient for FAO_CP_23012 is {model1.params.iloc[1]:.3f} with p-value {model1.pvalues.iloc[1]:.3f}, while the coefficient for FAO_CP_23013 is {model2.params.iloc[1]:.3f} with p-value {model2.pvalues.iloc[1]:.3f}. These results are interpreted as directional evidence rather than as a definitive causal claim, and the fitted relationship was then used to project simple forward paths for the indicators.", styles["BodyText"]))
+    story.append(Paragraph(f"Two HCP indicators were examined: FAO_CP_23012 and FAO_CP_23013. A simple regression was used to assess the association between these human-capital indicators and food inflation. The coefficient for FAO_CP_23012 is {model1.params.iloc[1]:.3f} with p-value {model1.pvalues.iloc[1]:.3f}, while the coefficient for FAO_CP_23013 is {model2.params.iloc[1]:.3f} with p-value {model2.pvalues.iloc[1]:.3f}. These fitted relationships were then used to create forward projections that connect the phase-one inflation forecast to a simple path for human-capital pressure indicators.", styles["BodyText"]))
 
     doc = SimpleDocTemplate(str(reports_dir / "feature_engineering_report.pdf"))
     doc.build(story[:3])
@@ -194,13 +208,14 @@ def print_metrics(metrics):
 
 
 if __name__ == "__main__":
+    args = parse_args()
     from preprocessing import create_lag_features, load_data, split_train_test
     from models import train_lstm, train_sarimax
 
     data = load_data()
     features = create_lag_features(data)
     train, test = split_train_test(features)
-    sarimax_result = train_sarimax(train, test)
-    lstm_result = train_lstm(train, test)
+    sarimax_result = train_sarimax(train, test, driver_name=args.driver)
+    lstm_result = train_lstm(train, test, driver_name=args.driver)
     root = Path(__file__).resolve().parent.parent
-    evaluate_models(sarimax_result, lstm_result, test, root / "figures", root / "outputs", root / "reports")
+    evaluate_models(sarimax_result, lstm_result, test, root / "figures", root / "outputs", root / "reports", driver_name=args.driver)

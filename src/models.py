@@ -1,3 +1,5 @@
+import argparse
+
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
@@ -16,21 +18,68 @@ except ImportError:
     Sequential = None
 
 
-def train_sarimax(train_data, test_data):
-    feature_columns = [
-        "brent_price",
-        "policy_rate",
-        "general_cpi",
-        "food_cpi",
-        "bdi_mean",
-        "bdi_std",
-        "bdi_range",
-        "bdi_return",
-        "food_price_inflation_lag_1",
-        "food_price_inflation_lag_3",
-        "food_price_inflation_lag_6",
-        "food_price_inflation_lag_12",
-    ]
+ALL_FEATURE_COLUMNS = [
+    "brent_price",
+    "policy_rate",
+    "general_cpi",
+    "food_cpi",
+    "bdi_mean",
+    "bdi_std",
+    "bdi_range",
+    "bdi_cv",
+    "bdi_return",
+    "bdi_month_direction",
+    "bdi_extreme_days",
+    "bdi_rolling_mean_3",
+    "bdi_rolling_std_3",
+    "brent_price_lag_1",
+    "brent_price_lag_3",
+    "brent_price_lag_6",
+    "brent_price_lag_12",
+    "policy_rate_lag_1",
+    "policy_rate_lag_3",
+    "policy_rate_lag_6",
+    "policy_rate_lag_12",
+    "bdi_mean_lag_1",
+    "bdi_mean_lag_3",
+    "bdi_mean_lag_6",
+    "bdi_mean_lag_12",
+    "food_price_inflation_lag_1",
+    "food_price_inflation_lag_3",
+    "food_price_inflation_lag_6",
+    "food_price_inflation_lag_12",
+]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train the food inflation forecasting baselines")
+    parser.add_argument(
+        "--driver",
+        choices=["all", "bdi", "brent"],
+        default="all",
+        help="Feature focus for the training run: all, bdi, or brent.",
+    )
+    return parser.parse_args()
+
+
+def get_feature_columns(driver_name: str):
+    if driver_name == "bdi":
+        return [
+            column
+            for column in ALL_FEATURE_COLUMNS
+            if column.startswith("bdi_") or column in {"policy_rate", "general_cpi", "food_cpi"}
+        ]
+    if driver_name == "brent":
+        return [
+            column
+            for column in ALL_FEATURE_COLUMNS
+            if column.startswith("brent_price") or column in {"policy_rate", "general_cpi", "food_cpi"}
+        ]
+    return ALL_FEATURE_COLUMNS
+
+
+def train_sarimax(train_data, test_data, driver_name="all"):
+    feature_columns = get_feature_columns(driver_name)
 
     adf_statistic, adf_pvalue, *_ = adfuller(train_data["food_price_inflation"], autolag="AIC")
 
@@ -66,21 +115,8 @@ def train_sarimax(train_data, test_data):
     }
 
 
-def train_lstm(train_data, test_data, lookback=12):
-    feature_columns = [
-        "brent_price",
-        "policy_rate",
-        "general_cpi",
-        "food_cpi",
-        "bdi_mean",
-        "bdi_std",
-        "bdi_range",
-        "bdi_return",
-        "food_price_inflation_lag_1",
-        "food_price_inflation_lag_3",
-        "food_price_inflation_lag_6",
-        "food_price_inflation_lag_12",
-    ]
+def train_lstm(train_data, test_data, lookback=12, driver_name="all"):
+    feature_columns = get_feature_columns(driver_name)
 
     train_features = train_data[feature_columns].to_numpy()
     train_target = train_data["food_price_inflation"].to_numpy()
@@ -154,12 +190,14 @@ def train_lstm(train_data, test_data, lookback=12):
 
 
 if __name__ == "__main__":
+    args = parse_args()
     from preprocessing import create_lag_features, load_data, split_train_test
 
     data = load_data()
     features = create_lag_features(data)
     train, test = split_train_test(features)
-    sarimax_result = train_sarimax(train, test)
-    lstm_result = train_lstm(train, test)
+    print("driver_focus", args.driver)
+    sarimax_result = train_sarimax(train, test, driver_name=args.driver)
+    lstm_result = train_lstm(train, test, driver_name=args.driver)
     print(sarimax_result["metrics"])
     print(lstm_result["metrics"])
