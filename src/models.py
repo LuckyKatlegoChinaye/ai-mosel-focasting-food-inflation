@@ -1,5 +1,5 @@
 
-##ARIMAX and LSTM models for food inflation forecasting.
+#SARIMAX and LSTM models for food inflation forecasting.
 
 
 import os
