@@ -25,7 +25,7 @@ def check_stationarity(series):
 
 def pick_sarimax_order(train_series, exog_train, max_p=2, max_q=2, max_d=1):
     # Small grid search to pick (p,d,q) based on AIC
-    # A student would try a few combinations, not just guess
+   
     best_aic = 1e10
     best_order = (1, 0, 1)
 
